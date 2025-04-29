@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<meta charset="utf-8" />
+<title>Real-Time BBS (polling JSON array)</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1"></script>
+
+<style>
+*{box-sizing:border-box;font-family:"Segoe UI",sans-serif}
+body{margin:0;background:#f2f4f8;display:flex;flex-direction:column;align-items:center;padding:2rem;gap:2rem}
+h1{margin:0;color:#334155;font-size:2rem}
+.card{width:360px;background:#fff;border-radius:1rem;box-shadow:0 8px 20px rgba(0,0,0,.08);text-align:center;padding:1.5rem}
+#big{font-weight:800;color:#16a34a;font-size:4rem;text-shadow:0 2px 4px rgba(0,0,0,.1)}
+/* 固定高度，避免 canvas 被 legend / label 撐高 */
+canvas{background:#fff;border-radius:1rem;box-shadow:0 8px 20px rgba(0,0,0,.08);height:360px!important}
+</style>
+
+<body>
+<h1>Real-Time BBS Monitor</h1>
+
+<div class="card">
+  <div style="color:#64748b;margin-bottom:.3rem">Current&nbsp;BBS</div>
+  <div id="big">--</div>
+</div>
+
+<canvas id="chart" width="900" height="360"></canvas>
+
+<script>
+/*── 請改成樹莓派的 IP 與埠 ──*/
+const BASE_URL = 'http://192.168.50.82:8000';
+/*── JSON array 內的欄位名稱 ──*/
+const T_KEY   = 't';   // 時間戳
+const BBS_KEY = 'bbs'; // 數值
+
+const big = document.getElementById('big');
+const ctx = document.getElementById('chart').getContext('2d');
+
+/* Chart.js：固定高寬 + 線性補間動畫 */
+const chart = new Chart(ctx, {
+  type: 'line',
+  data: {
+    labels: [],
+    datasets: [
+      { label:'Instant', borderColor:'#10b981', data:[], tension:.3 },
+      { label:'Avg 3',   borderColor:'#6366f1', borderDash:[6,3], data:[], tension:.3 }
+    ]
+  },
+  options: {
+    animation:{ duration:800, easing:'linear' },
+    responsive:false,            // 讓 <canvas> height=360 生效
+    maintainAspectRatio:false,
+    scales:{ y:{ min:0, max:56 } }
+  }
+});
+
+const buf = [];       // 最近 3 筆用來算平均
+let lastTs = null;    // 上一次畫到圖上的時間戳
+
+async function poll(){
+  try{
+    const arr = await fetch(`${BASE_URL}/bbs.json`, { cache:'no-cache' })
+                       .then(r => r.json());
+
+    if (!Array.isArray(arr) || arr.length===0) return;
+
+    /* 取「最後一筆」作為最新值 */
+    const latest = arr[arr.length-1];
+    const tsISO  = latest[T_KEY];
+    const valRaw = latest[BBS_KEY];
+
+    const val = parseFloat(valRaw);
+    if (isNaN(val) || tsISO === lastTs) return; // 無新資料就不更新
+
+    /* 更新大字 */
+    big.textContent = val;
+
+    /* 三筆移動平均（只吃最新真實點） */
+    buf.push(val);
+    if (buf.length > 3) buf.shift();
+    const avg = buf.reduce((a,b)=>a+b,0) / buf.length;
+
+    /* 時間戳轉成本地 HH:MM:SS */
+    const tsLabel = new Date(tsISO).toLocaleTimeString();
+
+    /* 更新圖表（保留最新 60 秒） */
+    chart.data.labels.push(tsLabel);
+    chart.data.datasets[0].data.push(val);
+    chart.data.datasets[1].data.push(avg.toFixed(1));
+
+    if (chart.data.labels.length > 60){
+      chart.data.labels.shift();
+      chart.data.datasets.forEach(ds => ds.data.shift());
+    }
+    chart.update();          // 自帶 0.8 s 補間
+    lastTs = tsISO;          // 記錄這筆已畫
+  }catch(err){
+    console.error('JSON 解析/網路錯誤：', err);
+  }
+}
+
+/* 每秒輪詢一次 bbs.json */
+setInterval(poll, 1000);
+</script>
+</body>
+</html>

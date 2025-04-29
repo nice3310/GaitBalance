@@ -1,0 +1,91 @@
+<!DOCTYPE html><html lang="en"><meta charset="utf-8">
+<title>Real-Time BBS Monitor</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1"></script>
+
+<style>
+*{box-sizing:border-box;font-family:"Segoe UI",sans-serif}
+body{margin:0;background:#f2f4f8;display:flex;flex-direction:column;align-items:center;padding:2rem;gap:2rem}
+.card{width:360px;max-width:90vw;background:#fff;border-radius:1rem;box-shadow:0 8px 20px rgba(0,0,0,.08);text-align:center;padding:1.5rem}
+#big{font-weight:800;color:#16a34a;font-size:4rem}
+h1{margin:0;color:#334155;font-size:2rem}
+</style>
+
+<body>
+<h1>Real-Time BBS Monitor</h1>
+
+<div class="card">
+  <div style="color:#64748b;margin-bottom:.3rem">Current&nbsp;BBS</div>
+  <div id="big">--</div>
+</div>
+
+<!-- 固定畫布大小，關掉 responsive -->
+<canvas id="chart" width="900" height="360"
+        style="background:#fff;border-radius:1rem;box-shadow:0 8px 20px rgba(0,0,0,.08)">
+</canvas>
+
+<script>
+const BASE = location.origin;                           // 與 json 同源
+const big  = document.getElementById('big');
+const ctx  = document.getElementById('chart').getContext('2d');
+
+const chart = new Chart(ctx,{
+  type:'line',
+  data:{labels:[],datasets:[
+    {label:'Instant',borderColor:'#10b981',borderWidth:2,data:[],tension:.3,pointRadius:2},
+    {label:'Avg 3',   borderColor:'#6366f1',borderWidth:2,borderDash:[6,3],data:[],tension:.3,pointRadius:0}
+  ]},
+  options:{
+    animation:false,
+    responsive:false,
+    scales:{
+      y:{beginAtZero:false},
+      x:{ticks:{maxTicksLimit:10}}
+    },
+    plugins:{legend:{labels:{boxWidth:12}}}
+  }
+});
+
+let lastIso = '';             // 記錄最後一筆時間字串，用來判斷「新增部分」
+const buf = [];               // 最近 3 筆做移動平均
+
+/* 一次性載入 + 後續輪詢共用函式 */
+async function fetchAndUpdate(){
+  try{
+    const res = await fetch(`${BASE}/bbs.json`,{cache:'no-cache'});
+    if(!res.ok) throw new Error('fetch failed');
+    const arr = await res.json();
+    if(!arr.length) return;
+
+    /* 找到新資料 */
+    const startIdx = lastIso ? arr.findIndex(o => o.t === lastIso) + 1 : 0;
+    const newSeg   = arr.slice(startIdx);
+
+    if(!newSeg.length) return;          // 沒新東西就跳過
+
+    newSeg.forEach(({t,bbs})=>{
+      const val = +bbs;
+      big.textContent = val;
+
+      // 3-point moving average
+      buf.push(val); if(buf.length>3) buf.shift();
+      const avg = buf.reduce((a,b)=>a+b,0)/buf.length;
+
+      // 更新圖表
+      const L = chart.data.labels;
+      L.push(t.split('T')[1]);                              // 只要 HH:MM:SS
+      chart.data.datasets[0].data.push(val);
+      chart.data.datasets[1].data.push(+avg.toFixed(1));
+      if(L.length>360){ L.shift(); chart.data.datasets.forEach(ds=>ds.data.shift()); }
+    });
+
+    lastIso = arr.at(-1).t;         // 更新最後時間
+    chart.update();
+  }catch(e){ console.error(e); }
+}
+
+(async ()=>{
+  await fetchAndUpdate();           // 第一次：把整段歷史畫出來
+  setInterval(fetchAndUpdate,1000); // 之後每秒補新點
+})();
+</script>
+</body></html>
